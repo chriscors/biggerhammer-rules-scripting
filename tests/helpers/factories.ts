@@ -1,6 +1,7 @@
 import { eq } from "@proofkit/fmodata";
 import {
 	CJT__ContractJobTitle,
+	CTR__Contract,
 	db,
 	TCD__TimeCard,
 	TCL__TimeCardLine,
@@ -14,7 +15,7 @@ export function requireEnv(name: string): string {
 }
 
 /** Get __id from a record or throw. Use when record is expected to have id. */
-export function assertId<T extends { __id?: string }>(obj: T): string {
+export function assertId<T extends { __id?: string | null }>(obj: T): string {
 	const id = obj.__id;
 	if (!id) throw new Error("Expected record to have __id");
 	return id;
@@ -229,4 +230,83 @@ export async function getResultTCLs(timecardId: string) {
 	);
 
 	return { clock, billable, payable, unworked, all: records };
+}
+
+/**
+ * Fetch a contract record by ID. Returns the full contract data
+ * so tests can read rule configuration values at runtime.
+ */
+export async function getContract(contractId: string) {
+	const result = await db
+		.from(CTR__Contract)
+		.list()
+		.where(eq(CTR__Contract.__id, contractId))
+		.execute();
+
+	if (result.error)
+		throw new Error(`Failed to read contract: ${result.error}`);
+	if (result.data.length === 0)
+		throw new Error(`No contract found with ID: ${contractId}`);
+
+	return result.data[0];
+}
+
+/**
+ * Create a Meal-type TCL record for testing (paid or unpaid).
+ * time_in and time_out should be "HH:MM:SS" format.
+ */
+export async function createMealTCL(params: {
+	timecardId: string;
+	contactId: string;
+	eventId: string;
+	contractId: string;
+	date: string;
+	timeIn: string;
+	timeOut: string;
+	isPaidMeal?: boolean;
+	isUnpaidMeal?: boolean;
+	contractJobTitleId?: string;
+	companyId?: string;
+	vendorId?: string;
+}) {
+	const cjtId =
+		params.contractJobTitleId ??
+		getCjtFromEnv(params.contractId) ??
+		(await getContractJobTitleId(params.contractId));
+
+	const result = await db
+		.from(TCL__TimeCardLine)
+		.insert({
+			_timecard_id: params.timecardId,
+			_contact_id: params.contactId,
+			_event_id: params.eventId,
+			date: params.date,
+			time_in: params.timeIn,
+			time_out: params.timeOut,
+			_contractJobTitle_id: cjtId,
+			_company_id: params.companyId ?? "",
+			_vendor_id: params.vendorId ?? "",
+			isBill: 0,
+			isPay: 0,
+			isMinimumCall: 0,
+			isUnpaidMeal: params.isUnpaidMeal ? 1 : 0,
+			isPaidMeal: params.isPaidMeal ? 1 : 0,
+			isFlat: 0,
+			isAfterMidnight: 0,
+		})
+		.execute();
+
+	if (result.error)
+		throw new Error(`Failed to create Meal TCL: ${result.error}`);
+	return result.data;
+}
+
+/** Convert "HH:MM:SS" to decimal hours. */
+export function parseTimeToHours(time: string): number {
+	const parts = time.split(":");
+	return (
+		parseInt(parts[0], 10) +
+		parseInt(parts[1], 10) / 60 +
+		parseInt(parts[2] ?? "0", 10) / 3600
+	);
 }
