@@ -203,11 +203,26 @@ If [ False ]
 Else If [ ( $this_time_in_ts_c - $last_time_out_ts ) / 3600 > $hrs_meal_break_max ]
 #
 # @history 02/12/2026, chris.corsi@proofgeist.com - New call boundary; skip B/A.
-#   When the gap exceeds the maximum meal break, this is a new call, not a meal
-#   dismissal. Do not apply the after-unpaid-meal rule across the gap. The bucket
-#   resets below handle the transition ($since_start_of_call = 0, etc.).
-#   Previously this branch checked $since_unpaid_meal against $hrs_after_unpaid_meal
-#   and could create spurious shortfall entries spanning the inter-call gap.
+# @history 02/16/2026, chris.corsi@proofgeist.com - Before transitioning to a new call,
+#   check for a pending after-unpaid-meal shortfall from the call that just ended.
+#   Previously the bucket reset (below) erased $since_unpaid_meal and incremented
+#   $meal_counter unconditionally, so Part 3 saw the new call's work instead of
+#   the shortfall from the earlier call. Now we create the entry inline (mirroring
+#   Part 3 logic) before the buckets are reset for the new call.
+#
+#  Flush pending after-meal shortfall before resetting for the new call.
+If [ $meal_counter > 0 	and $hrs_after_unpaid_meal > $since_unpaid_meal ]
+If [ not IsEmpty ( $hrs_minimum_call ) 	and $hrs_after_unpaid_meal - $since_unpaid_meal > $hrs_minimum_call - $since_start_of_call ]
+If [ $minimums_are_worked_time ]
+Perform Script [ "Create Worked Entry" ; Specified: From list ; Parameter: Let ([ 	~missing		= $hrs_after_unpaid_meal - $since_unpaid_meal; 	~last_out	= GetAsTime ( $last_time_out_ts ); 	~new_out		= ~last_out + ( ~missing * 3600 ) ]; 	List ( 		"iSource="	& Max ( $tcl_loop - 1; 1 ); 		"time_in="	& CF_TimeFormat ( ~last_out ); 		"time_out="	& CF_TimeFormat ( ~new_out ); 		"incl_NT="	& $incl_NT; 		"incl_OT="	& $incl_OT; 		"note="		& "After unpaid meal rule applied"; 	) ) ]
+Set Variable [ $record_count ; Value: $record_count + 1 ]
+Set Variable [ $tcl_loop ; Value: $tcl_loop + 1 ]
+Else
+Perform Script [ "Create Unworked Entry" ; Specified: From list ; Parameter: Let ( 	~duration = GetAsTime (( $hrs_after_unpaid_meal - $since_unpaid_meal ) * 3600 ); 	List ( 		"source="		& CF_addPSlashes ( Evaluate ( "$$" & $$this_mode & "[" & Max ( $tcl_loop - 1; 1 ) & "]" ) ); 		"hrsUnworked="	& ~duration; 		"time_in="		& CF_TimeFormat ( GetAsTime ( $last_time_out_ts )); 		"time_out="		& CF_TimeFormat ( GetAsTime ( $last_time_out_ts + ~duration )); 		"incl_NT="		& $incl_NT; 		"incl_OT="		& $incl_OT; 		"note="			& "After unpaid meal rule applied @ " & CF_TimeFormat ( GetAsTime ( $last_time_out_ts )); 	) ) ]
+End If
+End If
+End If
+#
 Set Variable [ $call_count ; Value: $call_count + 1 ]
 # 
 #  If there isn't enough paid time since our last meal break...
@@ -241,17 +256,23 @@ Perform Script [ “Create Unworked Entry” ; Specified: From list ; Parameter:
 End If
 End If
 End If
-# 
+#
 #  Empty the buckets.
 Set Variable [ $since_last_meal ; Value: 0 ]
 Set Variable [ $since_unpaid_meal ; Value: 0 ]
-#  Increment the unpaid meal meal counter
-Set Variable [ $meal_counter ; Value: $meal_counter + 1 ]
-# 
+#
 #  If the time gap was longer than the Maximum Meal Break...
 If [ ( $this_time_in_ts_c - $last_time_out_ts ) / 3600 > $hrs_meal_break_max ]
-#  reset this counter too.
+# @history 02/16/2026, chris.corsi@proofgeist.com - New call boundary resets
+#   $meal_counter to 0 and $since_start_of_call to 0. A new call is not a meal
+#   dismissal, so the counter should not increment. Resetting to 0 ensures the
+#   new call's first gap uses $hrs_before_unpaid_meal (not $hrs_between_unpaid_meal)
+#   and Part 3 only fires if a meal occurs within the new call.
+Set Variable [ $meal_counter ; Value: 0 ]
 Set Variable [ $since_start_of_call ; Value: 0 ]
+Else
+#  Actual meal gap — increment the unpaid meal counter.
+Set Variable [ $meal_counter ; Value: $meal_counter + 1 ]
 End If
 End If
 # 
